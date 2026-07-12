@@ -7,30 +7,26 @@ import {
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
 /* ═══════════════════════════════════════════════════════════
-   API Layer — caching, rate-limiting, helpers
+   API Layer — OriginManga
    ═══════════════════════════════════════════════════════════ */
 
-const API_BASE = '/api/mangadex';
-const IMG_CDN = 'https://uploads.mangadex.org';
+const API_BASE = 'https://originmanga.com/api/public';
 
 function proxyImage(url) {
   if (!url) return url;
-  if (url.startsWith('/api/') || url.startsWith('/proxy/')) return url;
-  if (url.startsWith(IMG_CDN + '/')) {
-    return url.replace(IMG_CDN, '/proxy');
+  if (url.startsWith('/proxy/')) return url;
+  if (url.includes('imgsrv4.com') || url.includes('mgeko.cc')) {
+    return `/proxy/manga?url=${encodeURIComponent(url)}`;
   }
-  return `/api/proxy?url=${encodeURIComponent(url)}`;
+  return url;
 }
 
-// Simple in-memory cache: key → { data, ts }
 const apiCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 min
+const CACHE_TTL = 5 * 60 * 1000;
 
-// Rate-limiter: max 5 requests per second
 const requestTimestamps = [];
 function waitForRateLimit() {
   const now = Date.now();
-  // prune old timestamps
   while (requestTimestamps.length && requestTimestamps[0] < now - 1000) {
     requestTimestamps.shift();
   }
@@ -61,36 +57,46 @@ async function apiFetch(path, skipCache = false) {
 // ── Helpers ──────────────────────────────────────────────
 
 function getMangaTitle(manga) {
-  const t = manga.attributes?.title;
-  if (!t) return 'Untitled';
-  return t.en || t['ja-ro'] || t.ja || Object.values(t)[0] || 'Untitled';
+  return manga.title || 'Untitled';
 }
 
 function getMangaDescription(manga) {
-  const d = manga.attributes?.description;
-  if (!d) return '';
-  return d.en || d['ja-ro'] || Object.values(d)[0] || '';
+  return manga.description || '';
 }
 
 function getMangaCover(manga) {
-  const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
-  if (!coverRel?.attributes?.fileName) return null;
-  return proxyImage(`${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.256.jpg`);
+  return proxyImage(manga.coverUrl);
 }
 
 function getMangaCoverHQ(manga) {
-  const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
-  if (!coverRel?.attributes?.fileName) return null;
-  return proxyImage(`${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.512.jpg`);
+  return proxyImage(manga.coverUrl);
 }
 
 function getMangaAuthor(manga) {
-  const authorRel = manga.relationships?.find((r) => r.type === 'author');
-  return authorRel?.attributes?.name || 'Unknown';
+  return manga.author || 'Unknown';
 }
 
 function getMangaTags(manga) {
-  return (manga.attributes?.tags || []).map((t) => t.attributes?.name?.en).filter(Boolean);
+  if (!manga.genres) return [];
+  return manga.genres
+    .map((g) => {
+      if (typeof g === 'string') {
+        const cleaned = g.replace(/^\["|"\]$/g, '').replace(/^"/, '').replace(/"$/, '');
+        return cleaned;
+      }
+      return g;
+    })
+    .filter(Boolean);
+}
+
+function normalizeStatus(status) {
+  if (!status) return 'ongoing';
+  const s = status.toLowerCase();
+  if (s.includes('ongoing') || s.includes('releasing')) return 'ongoing';
+  if (s.includes('completed') || s.includes('finished')) return 'completed';
+  if (s.includes('hiatus')) return 'hiatus';
+  if (s.includes('cancel')) return 'cancelled';
+  return 'ongoing';
 }
 
 const STATUS_STYLES = {
@@ -115,18 +121,18 @@ function useDebounce(value, delay) {
   return debounced;
 }
 
-function useMangaFetch(endpoint, deps = []) {
+function useMangaFetch(url, deps = []) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const mountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
-    if (!endpoint) { setLoading(false); return; }
+    if (!url) { setLoading(false); return; }
     setLoading(true);
     setError(null);
     try {
-      const json = await apiFetch(endpoint);
+      const json = await apiFetch(url);
       if (mountedRef.current) setData(json);
     } catch (err) {
       if (mountedRef.current) setError(err.message);
@@ -134,7 +140,7 @@ function useMangaFetch(endpoint, deps = []) {
       if (mountedRef.current) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endpoint, ...deps]);
+  }, [url, ...deps]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -148,8 +154,6 @@ function useMangaFetch(endpoint, deps = []) {
 /* ═══════════════════════════════════════════════════════════
    Sub-components
    ═══════════════════════════════════════════════════════════ */
-
-// ── Skeleton Cards ──────────────────────────────────────
 
 function SkeletonCard() {
   return (
@@ -171,8 +175,6 @@ function SkeletonGrid({ count = 12 }) {
   );
 }
 
-// ── Error State ─────────────────────────────────────────
-
 function ErrorState({ message, onRetry }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-4 animate-fade-in">
@@ -191,13 +193,11 @@ function ErrorState({ message, onRetry }) {
   );
 }
 
-// ── Manga Card ──────────────────────────────────────────
-
 function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
   const title = getMangaTitle(manga);
   const cover = getMangaCover(manga);
   const author = getMangaAuthor(manga);
-  const status = manga.attributes?.status;
+  const status = normalizeStatus(manga.status);
   const lastChapter = progress?.lastChapter;
 
   return (
@@ -205,7 +205,6 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
       onClick={onClick}
       className="group text-left rounded-xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden hover:border-zinc-700 hover:bg-zinc-900 transition-all duration-200 hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
     >
-      {/* Cover */}
       <div className="relative aspect-[3/4] overflow-hidden bg-zinc-800">
         {cover ? (
           <img
@@ -220,7 +219,6 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-        {/* Status badge */}
         {status && (
           <div className="absolute top-2 right-2">
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border capitalize ${STATUS_STYLES[status] || 'bg-zinc-700/50 text-zinc-300 border-zinc-600'}`}>
@@ -228,7 +226,6 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
             </span>
           </div>
         )}
-        {/* Library indicator */}
         {isInLibrary && (
           <div className="absolute top-2 left-2">
             <Heart size={14} className="text-red-400 fill-red-400 drop-shadow" />
@@ -247,7 +244,6 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
           </div>
         )}
       </div>
-      {/* Info */}
       <div className="p-3 space-y-1.5">
         <h3 className="font-semibold text-sm text-zinc-100 truncate group-hover:text-[var(--color-accent-light)] transition-colors">
           {title}
@@ -267,76 +263,89 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
 
 function BrowseView({ onSelectManga, library, progress, categories }) {
   const [searchInput, setSearchInput] = useState('');
-  const [activeTab, setActiveTab] = useState('popular'); // popular | latest | library
-  const [offset, setOffset] = useState(0);
+  const [activeTab, setActiveTab] = useState('latest');
+  const [page, setPage] = useState(1);
   const [allManga, setAllManga] = useState([]);
   const debouncedSearch = useDebounce(searchInput, 300);
   const scrollRef = useRef(null);
-  const lastAccumulatedRef = useRef(null);
+  const lastDataRef = useRef(null);
 
   const isSearching = debouncedSearch.trim().length > 0;
 
-  const buildEndpoint = useCallback(() => {
-    const base = '/manga?limit=20&includes[]=cover_art&includes[]=author&contentRating[]=safe&contentRating[]=suggestive';
+  const buildUrl = useCallback(() => {
     if (isSearching) {
-      return `${base}&title=${encodeURIComponent(debouncedSearch.trim())}&offset=${offset}&order[relevance]=desc`;
+      return `/manga?query=${encodeURIComponent(debouncedSearch.trim())}&page=${page}&limit=20`;
     }
-    if (activeTab === 'latest') {
-      return `${base}&offset=${offset}&order[latestUploadedChapter]=desc`;
+    if (activeTab === 'popular') {
+      return `/manga?page=${page}&limit=20`;
     }
-    // popular
-    return `${base}&offset=${offset}&order[followedCount]=desc`;
-  }, [debouncedSearch, isSearching, activeTab, offset]);
+    return `/manga?page=${page}&limit=20`;
+  }, [debouncedSearch, isSearching, activeTab, page]);
 
-  const endpoint = activeTab === 'library' ? null : buildEndpoint();
-  const { data, loading, error, retry } = useMangaFetch(endpoint, [endpoint]);
+  const url = activeTab === 'library' ? null : buildUrl();
+  const { data, loading, error, retry } = useMangaFetch(url, [url]);
 
-  // Accumulate results across pages
   useEffect(() => {
-    if (data?.data && data !== lastAccumulatedRef.current) {
-      lastAccumulatedRef.current = data;
-      if (offset === 0) {
-        setAllManga(data.data);
+    if (data?.manga && data !== lastDataRef.current) {
+      lastDataRef.current = data;
+      if (page === 1) {
+        setAllManga(data.manga);
       } else {
-        setAllManga((prev) => [...prev, ...data.data]);
+        setAllManga((prev) => [...prev, ...data.manga]);
       }
     }
-  }, [data, offset]);
+  }, [data, page]);
 
-  // Reset when search/tab changes
   useEffect(() => {
-    setOffset(0);
+    setPage(1);
     setAllManga([]);
-    lastAccumulatedRef.current = null;
+    lastDataRef.current = null;
   }, [debouncedSearch, activeTab]);
 
-  const hasMore = data ? offset + 20 < data.total : false;
+  const hasMore = data?.pagination ? data.pagination.page < data.pagination.totalPages : false;
 
   const loadMore = () => {
-    setOffset((o) => o + 20);
+    setPage((p) => p + 1);
   };
 
-  // Build library manga list from stored IDs
   const libraryIds = Object.keys(library);
-  const libraryEndpoint = libraryIds.length > 0 && activeTab === 'library'
-    ? `/manga?limit=100&includes[]=cover_art&includes[]=author&${libraryIds.map((id) => `ids[]=${id}`).join('&')}`
-    : null;
-  const { data: libraryData, loading: libraryLoading, error: libraryError, retry: libraryRetry } = useMangaFetch(libraryEndpoint, [libraryEndpoint]);
+  const [libraryData, setLibraryData] = useState(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState(null);
+
+  useEffect(() => {
+    if (activeTab !== 'library' || libraryIds.length === 0) {
+      setLibraryData(null);
+      return;
+    }
+    setLibraryLoading(true);
+    setLibraryError(null);
+    Promise.all(
+      libraryIds.map((id) =>
+        apiFetch(`/manga/${id}`).catch(() => null)
+      )
+    ).then((results) => {
+      setLibraryData(results.filter(Boolean));
+      setLibraryLoading(false);
+    }).catch((err) => {
+      setLibraryError(err.message);
+      setLibraryLoading(false);
+    });
+  }, [activeTab, libraryIds.join(',')]);
 
   const tabs = [
-    { id: 'popular', label: 'Popular', icon: Star },
     { id: 'latest', label: 'Latest', icon: Clock },
+    { id: 'popular', label: 'All', icon: Star },
     { id: 'library', label: 'Library', icon: Heart },
   ];
 
-  const displayManga = activeTab === 'library' ? (libraryData?.data || []) : allManga;
+  const displayManga = activeTab === 'library' ? (libraryData || []) : allManga;
   const isLoading = activeTab === 'library' ? libraryLoading : loading;
   const currentError = activeTab === 'library' ? libraryError : error;
-  const currentRetry = activeTab === 'library' ? libraryRetry : retry;
+  const currentRetry = activeTab === 'library' ? undefined : retry;
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-      {/* Header */}
       <div className="shrink-0 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur px-4 sm:px-5 py-4 space-y-3">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-[var(--color-accent)]/15 flex items-center justify-center">
@@ -344,11 +353,10 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold text-zinc-100 tracking-tight">Manga Reader</h1>
-            <p className="text-[11px] text-zinc-500">{libraryIds.length} saved · Powered by MangaDex</p>
+            <p className="text-[11px] text-zinc-500">{libraryIds.length} saved · Powered by OriginManga</p>
           </div>
         </div>
 
-        {/* Search */}
         <div className="relative">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
           <input
@@ -368,7 +376,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
           )}
         </div>
 
-        {/* Tabs */}
         {!isSearching && (
           <div className="flex gap-1">
             {tabs.map((tab) => {
@@ -399,7 +406,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
         )}
       </div>
 
-      {/* Content */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-5">
         {isSearching && searchInput !== debouncedSearch && (
           <div className="flex items-center justify-center py-12">
@@ -436,7 +442,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
                 );
               })}
             </div>
-            {/* Load more */}
             {activeTab !== 'library' && hasMore && (
               <div className="flex justify-center mt-6">
                 <button
@@ -470,7 +475,7 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
   const cover = getMangaCoverHQ(manga);
   const author = getMangaAuthor(manga);
   const description = getMangaDescription(manga);
-  const status = manga.attributes?.status;
+  const status = normalizeStatus(manga.status);
   const tags = getMangaTags(manga);
   const isInLibrary = !!library[manga.id];
   const mangaProgress = progress[manga.id];
@@ -479,20 +484,12 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
 
-  // Fetch chapters
-  const chaptersEndpoint = `/manga/${manga.id}/feed?limit=500&offset=0&translatedLanguage[]=en&order[chapter]=asc&includes[]=scanlation_group&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+  const chaptersEndpoint = `/manga/${manga.id}/chapters`;
   const { data: chaptersData, loading: chapLoading, error: chapError, retry: chapRetry } = useMangaFetch(chaptersEndpoint);
 
   const chapters = useMemo(() => {
-    if (!chaptersData?.data) return [];
-    // Deduplicate by chapter number, keep first
-    const seen = new Map();
-    for (const ch of chaptersData.data) {
-      const num = ch.attributes?.chapter;
-      const key = num || ch.id;
-      if (!seen.has(key)) seen.set(key, ch);
-    }
-    return Array.from(seen.values());
+    if (!chaptersData?.chapters) return [];
+    return chaptersData.chapters.sort((a, b) => (a.chapterNumber || 0) - (b.chapterNumber || 0));
   }, [chaptersData]);
 
   const toggleLibrary = () => {
@@ -526,14 +523,12 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
   const continueChapterIndex = useMemo(() => {
     if (!mangaProgress?.lastChapterId || chapters.length === 0) return -1;
     const idx = chapters.findIndex((ch) => ch.id === mangaProgress.lastChapterId);
-    // Return next chapter if current was completed, or current
     if (idx >= 0 && idx < chapters.length - 1) return idx + 1;
     return idx;
   }, [mangaProgress, chapters]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-      {/* Header with cover */}
       <div className="shrink-0 border-b border-zinc-800">
         <div className="flex items-start gap-4 p-4 sm:p-5">
           <button
@@ -542,7 +537,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
           >
             <ArrowLeft size={18} />
           </button>
-          {/* Cover */}
           <div className="w-24 h-36 sm:w-28 sm:h-40 rounded-lg overflow-hidden shrink-0 shadow-lg bg-zinc-800">
             {cover ? (
               <img src={cover} alt={title} className="w-full h-full object-cover" />
@@ -552,7 +546,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
               </div>
             )}
           </div>
-          {/* Info */}
           <div className="min-w-0 flex-1 space-y-2">
             <h2 className="text-lg sm:text-xl font-bold text-zinc-100 line-clamp-2">{title}</h2>
             <p className="text-xs text-zinc-400">{author}</p>
@@ -560,6 +553,11 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
               {status && (
                 <span className={`text-xs px-2 py-0.5 rounded border capitalize ${STATUS_STYLES[status] || 'bg-zinc-700/50 text-zinc-300 border-zinc-600'}`}>
                   {status}
+                </span>
+              )}
+              {manga.chapterCount > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/40">
+                  {manga.chapterCount} chapters
                 </span>
               )}
             </div>
@@ -575,7 +573,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
                 </span>
               )}
             </div>
-            {/* Actions */}
             <div className="flex items-center gap-2 pt-1 flex-wrap">
               <button
                 onClick={toggleLibrary}
@@ -645,7 +642,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
             </div>
           </div>
         </div>
-        {/* Description */}
         {description && (
           <div className="px-4 sm:px-5 pb-4">
             <p className="text-xs text-zinc-400 line-clamp-4 leading-relaxed">{description}</p>
@@ -653,7 +649,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
         )}
       </div>
 
-      {/* Continue reading */}
       {continueChapterIndex >= 0 && (
         <div className="shrink-0 px-4 sm:px-5 pt-4">
           <button
@@ -661,12 +656,11 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
             className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[var(--color-accent)] hover:bg-[var(--color-accent-light)] text-white font-medium text-sm transition-colors"
           >
             <BookOpen size={16} />
-            Continue Ch. {chapters[continueChapterIndex].attributes?.chapter || '?'}
+            Continue Ch. {chapters[continueChapterIndex].chapterNumber || '?'}
           </button>
         </div>
       )}
 
-      {/* Chapter list */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-4 sm:px-5 py-3">
           <h3 className="text-sm font-semibold text-zinc-300 mb-2">
@@ -683,18 +677,16 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
 
           {!chapLoading && !chapError && chapters.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-zinc-500 text-sm">No English chapters available</p>
+              <p className="text-zinc-500 text-sm">No chapters available</p>
             </div>
           )}
 
           <div className="space-y-1">
-            {chapters.map((ch) => {
-              const chNum = ch.attributes?.chapter;
-              const chTitle = ch.attributes?.title;
-              const pages = ch.attributes?.pages;
+            {[...chapters].reverse().map((ch) => {
+              const chNum = ch.chapterNumber;
+              const chTitle = ch.title;
+              const pageCount = ch.pageCount || ch.pages?.length || 0;
               const isRead = mangaProgress?.readChapters?.[ch.id];
-              const groupRel = ch.relationships?.find((r) => r.type === 'scanlation_group');
-              const groupName = groupRel?.attributes?.name;
 
               return (
                 <button
@@ -713,12 +705,9 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
                     <span className={`text-sm block truncate ${isRead ? 'text-zinc-500' : 'text-zinc-300'}`}>
                       {chTitle || `Chapter ${chNum || '?'}`}
                     </span>
-                    {groupName && (
-                      <span className="text-[10px] text-zinc-600 block truncate">{groupName}</span>
-                    )}
                   </div>
-                  {pages && (
-                    <span className="text-[10px] text-zinc-600 shrink-0">{pages}p</span>
+                  {pageCount > 0 && (
+                    <span className="text-[10px] text-zinc-600 shrink-0">{pageCount}p</span>
                   )}
                   {isRead && (
                     <span className="text-[10px] text-[var(--color-accent)] font-medium px-1.5 py-0.5 rounded bg-[var(--color-accent)]/10 shrink-0">
@@ -747,10 +736,9 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
   const scrollRef = useRef(null);
 
   const title = getMangaTitle(manga);
-  const chNum = chapter.attributes?.chapter;
+  const chNum = chapter.chapterNumber;
   const isPager = readingMode === 'pager';
 
-  // Find current index in chapters array for navigation
   const currentIndex = useMemo(
     () => chapters.findIndex((ch) => ch.id === chapter.id),
     [chapters, chapter.id]
@@ -758,7 +746,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
   const prevChapter = currentIndex > 0 ? chapters[currentIndex - 1] : null;
   const nextChapter = currentIndex < chapters.length - 1 ? chapters[currentIndex + 1] : null;
 
-  // Fetch page URLs via at-home API
   useEffect(() => {
     let cancelled = false;
     async function fetchPages() {
@@ -767,22 +754,18 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
       setPageUrls([]);
       setLoadedImages(new Set());
       try {
-        const json = await apiFetch(`/at-home/server/${chapter.id}`, true);
-        if (cancelled) return;
-        if (json.result === 'error' || !json.chapter) {
-          throw new Error(json.errors?.[0]?.detail || 'At-home server returned an error');
+        if (chapter.pages && chapter.pages.length > 0) {
+          if (!cancelled) setPageUrls(chapter.pages);
+        } else {
+          const json = await apiFetch(`/manga/${manga.id}/chapters`, true);
+          if (cancelled) return;
+          const ch = json?.chapters?.find((c) => c.id === chapter.id);
+          if (ch?.pages?.length) {
+            setPageUrls(ch.pages);
+          } else {
+            throw new Error('No pages available for this chapter');
+          }
         }
-        const { baseUrl, chapter: chData } = json;
-        if (!baseUrl || (!chData?.data?.length && !chData?.dataSaver?.length)) {
-          throw new Error('No page data available for this chapter');
-        }
-        const useSaver = chData.dataSaver?.length > 0;
-        const quality = useSaver ? 'data-saver' : 'data';
-        const filenames = useSaver ? chData.dataSaver : chData.data;
-        const urls = filenames.map(
-          (filename) => `${baseUrl}/${quality}/${chData.hash}/${filename}`
-        );
-        setPageUrls(urls);
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -791,15 +774,13 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
     }
     fetchPages();
     return () => { cancelled = true; };
-  }, [chapter.id]);
+  }, [chapter.id, manga.id]);
 
-  // Scroll to top / reset pager when chapter changes
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
     setPagerIndex(0);
   }, [chapter.id]);
 
-  // Mark chapter as read
   useEffect(() => {
     setProgress((prev) => ({
       ...prev,
@@ -822,28 +803,10 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
   const retryFetch = useCallback(() => {
     setLoading(true);
     setError(null);
-    apiFetch(`/at-home/server/${chapter.id}`, true)
-      .then((json) => {
-        if (json.result === 'error' || !json.chapter) {
-          throw new Error(json.errors?.[0]?.detail || 'At-home server returned an error');
-        }
-        const { baseUrl, chapter: chData } = json;
-        if (!baseUrl || (!chData?.data?.length && !chData?.dataSaver?.length)) {
-          throw new Error('No page data available for this chapter');
-        }
-        const useSaver = chData.dataSaver?.length > 0;
-        const quality = useSaver ? 'data-saver' : 'data';
-        const filenames = useSaver ? chData.dataSaver : chData.data;
-        const urls = filenames.map(
-          (filename) => `${baseUrl}/${quality}/${chData.hash}/${filename}`
-        );
-        setPageUrls(urls);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [chapter.id]);
+    setPageUrls(chapter.pages || []);
+    setLoading(false);
+  }, [chapter]);
 
-  // Pager keyboard navigation
   useEffect(() => {
     if (!isPager || pageUrls.length === 0) return;
     const handleKey = (e) => {
@@ -864,7 +827,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-      {/* Reader header */}
       <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur-sm z-20">
         <button
           onClick={onBack}
@@ -904,7 +866,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
         </div>
       </div>
 
-      {/* Pages — Pager mode */}
       {isPager ? (
         <div className="flex-1 flex flex-col bg-zinc-950 relative">
           {loading && (
@@ -940,12 +901,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   alt={`Page ${pagerIndex + 1}`}
                   className="max-h-full max-w-full object-contain"
                   onLoad={() => handleImageLoad(pagerIndex)}
-                  onError={(e) => {
-                    if (!e.target.dataset.retried) {
-                      e.target.dataset.retried = 'true';
-                      e.target.src = proxyImage(pageUrls[pagerIndex].replace('/data-saver/', '/data/'));
-                    }
-                  }}
                   draggable={false}
                 />
                 {pagerIndex > 0 && (
@@ -988,7 +943,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
           )}
         </div>
       ) : (
-      /* Pages — Webtoon mode (vertical scroll) */
       <div ref={scrollRef} className="flex-1 overflow-y-auto bg-zinc-950">
         {loading && (
           <div className="flex items-center justify-center py-20">
@@ -1009,7 +963,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
           <div className="max-w-3xl mx-auto py-2 px-1 sm:px-2 space-y-1">
             {pageUrls.map((url, i) => (
               <div key={i} className="relative w-full bg-zinc-900 rounded overflow-hidden">
-                {/* Loading spinner per page */}
                 {!loadedImages.has(i) && (
                   <div className="absolute inset-0 flex items-center justify-center bg-zinc-900 z-10 min-h-[200px]">
                     <div className="flex flex-col items-center gap-2">
@@ -1024,17 +977,10 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   loading="lazy"
                   className="w-full h-auto block"
                   onLoad={() => handleImageLoad(i)}
-                  onError={(e) => {
-                    if (!e.target.dataset.retried) {
-                      e.target.dataset.retried = 'true';
-                      e.target.src = proxyImage(url.replace('/data-saver/', '/data/'));
-                    }
-                  }}
                 />
               </div>
             ))}
 
-            {/* Chapter end navigation */}
             <div className="py-8 flex flex-col items-center gap-4">
               <div className="text-sm text-zinc-500">End of Chapter {chNum || '?'}</div>
               <div className="flex items-center gap-3">
@@ -1077,7 +1023,6 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
    ═══════════════════════════════════════════════════════════ */
 
 export default function MangaReaderApp() {
-  // Views: 'browse' | 'detail' | 'reader'
   const [view, setView] = useState('browse');
   const [selectedManga, setSelectedManga] = useState(null);
   const [selectedChapter, setSelectedChapter] = useState(null);
@@ -1091,8 +1036,6 @@ export default function MangaReaderApp() {
   const toggleReadingMode = useCallback(() => {
     setReadingMode((prev) => prev === 'webtoon' ? 'pager' : 'webtoon');
   }, [setReadingMode]);
-
-  // ── Navigation callbacks ───────────────────────────────
 
   const openDetail = useCallback((manga) => {
     setSelectedManga(manga);
@@ -1126,8 +1069,6 @@ export default function MangaReaderApp() {
     if (allChapters?.length) setChapters(allChapters);
     setView('reader');
   }, []);
-
-  // ── Render ─────────────────────────────────────────────
 
   if (view === 'reader' && selectedManga && selectedChapter) {
     return (
