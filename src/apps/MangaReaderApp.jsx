@@ -31,6 +31,14 @@ const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int,
   }
 }`;
 
+const POPULAR_QUERY = `query($type: VaildPopularTypeEnumType!, $size: Int!, $page: Int, $dateRange: Int, $allowAdult: Boolean, $allowUnknown: Boolean) {
+  queryPopular(type: $type, size: $size, dateRange: $dateRange, page: $page, allowAdult: $allowAdult, allowUnknown: $allowUnknown) {
+    recommendations {
+      anyCard { _id name englishName thumbnail availableChapters genres score }
+    }
+  }
+}`;
+
 const GENRES = [
   'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror',
   'Mystery', 'Romance', 'Sci-fi', 'Slice of Life', 'Sports',
@@ -162,7 +170,26 @@ async function searchManga(query, page = 1, filters = {}) {
 }
 
 async function fetchPopularManga(page = 1, filters = {}) {
-  return searchManga('', page, filters);
+  const { genres = [] } = filters;
+  const data = await cachedGqlQuery(POPULAR_QUERY, {
+    type: 'manga',
+    size: 50,
+    dateRange: 0,
+    page,
+    allowAdult: true,
+    allowUnknown: false,
+  });
+  const recs = data?.data?.queryPopular?.recommendations || [];
+  let edges = recs.map((r) => r.anyCard).filter(Boolean);
+  let manga = mapMangaEdges(edges);
+  if (genres.length > 0) {
+    manga = manga.filter((m) => genres.some((g) => m.genres.map((mg) => mg.toLowerCase()).includes(g.toLowerCase())));
+  }
+  const hasNextPage = edges.length >= 50;
+  return {
+    manga,
+    pagination: { page, totalPages: hasNextPage ? page + 1 : page },
+  };
 }
 
 async function fetchMangaDetail(id) {
