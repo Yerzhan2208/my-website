@@ -26,7 +26,7 @@ const CHAPTER_PAGES_QUERY = `query chaptersForRead($mangaId: String!, $chapterSt
 
 const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int, $translationType: VaildTranslationTypeMangaEnumType, $countryOrigin: VaildCountryOriginEnumType) {
   mangas(search: $search, limit: $limit, page: $page, translationType: $translationType, countryOrigin: $countryOrigin) {
-    edges { _id name englishName thumbnail availableChapters genres }
+    edges { _id name englishName thumbnail availableChapters genres score }
     pageInfo { total hasNextPage }
   }
 }`;
@@ -34,7 +34,7 @@ const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int,
 const POPULAR_QUERY = `query($type: VaildPopularTypeEnumType!, $size: Int!, $page: Int, $dateRange: Int, $allowAdult: Boolean, $allowUnknown: Boolean) {
   queryPopular(type: $type, size: $size, dateRange: $dateRange, page: $page, allowAdult: $allowAdult, allowUnknown: $allowUnknown) {
     recommendations {
-      anyCard { _id name englishName thumbnail availableChapters genres }
+      anyCard { _id name englishName thumbnail availableChapters genres score }
     }
   }
 }`;
@@ -145,6 +145,7 @@ function mapMangaEdges(edges) {
     status: 'ongoing',
     chapterCount: e.availableChapters?.sub || 0,
     genres: e.genres || [],
+    score: e.score || null,
     _allManga: { availableChapters: e.availableChapters, thumbnail: e.thumbnail },
   }));
 }
@@ -168,7 +169,8 @@ async function searchManga(query, page = 1, filters = {}) {
   };
 }
 
-async function fetchPopularManga(page = 1) {
+async function fetchPopularManga(page = 1, filters = {}) {
+  const { genres = [] } = filters;
   const data = await cachedGqlQuery(POPULAR_QUERY, {
     type: 'manga',
     size: 26,
@@ -178,10 +180,14 @@ async function fetchPopularManga(page = 1) {
     allowUnknown: false,
   });
   const recs = data?.data?.queryPopular?.recommendations || [];
-  const edges = recs.map((r) => r.anyCard).filter(Boolean);
+  let edges = recs.map((r) => r.anyCard).filter(Boolean);
+  let manga = mapMangaEdges(edges);
+  if (genres.length > 0) {
+    manga = manga.filter((m) => genres.some((g) => m.genres.map((mg) => mg.toLowerCase()).includes(g.toLowerCase())));
+  }
   return {
-    manga: mapMangaEdges(edges),
-    pagination: { page, totalPages: 1, total: edges.length },
+    manga,
+    pagination: { page, totalPages: 1, total: manga.length },
   };
 }
 
@@ -410,9 +416,16 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
           {title}
         </h3>
         <p className="text-[11px] text-zinc-500 truncate">{author}</p>
-        {manga.chapterCount > 0 && (
-          <p className="text-[10px] text-zinc-600">{manga.chapterCount} chapters</p>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {manga.score != null && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-400">
+              <Star size={10} className="fill-amber-400" />{Number(manga.score).toFixed(1)}
+            </span>
+          )}
+          {manga.chapterCount > 0 && (
+            <span className="text-[10px] text-zinc-600">{manga.chapterCount} ch</span>
+          )}
+        </div>
         {lastChapter && (
           <p className="text-[10px] text-[var(--color-accent)]">
             Ch. {lastChapter}
@@ -457,7 +470,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     setError(null);
     try {
       const result = tab === 'popular'
-        ? await fetchPopularManga(p)
+        ? await fetchPopularManga(p, currentFilters)
         : await searchManga(query || '', p, currentFilters);
       setTotalPages(result.pagination?.totalPages || 0);
       if (p === 1) {
@@ -866,6 +879,11 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
               {manga.chapterCount > 0 && (
                 <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/40">
                   {manga.chapterCount} chapters
+                </span>
+              )}
+              {manga.score != null && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-zinc-800 text-amber-400 border border-zinc-700/40">
+                  <Star size={11} className="fill-amber-400" />{Number(manga.score).toFixed(1)}
                 </span>
               )}
             </div>
