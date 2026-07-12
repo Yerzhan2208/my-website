@@ -31,10 +31,11 @@ const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int,
   }
 }`;
 
-const POPULAR_QUERY = `query($search: SearchInput, $limit: Int, $page: Int) {
-  mangas(search: $search, limit: $limit, page: $page) {
-    edges { _id name englishName thumbnail availableChapters genres }
-    pageInfo { total hasNextPage }
+const POPULAR_QUERY = `query($type: VaildPopularTypeEnumType!, $size: Int!, $page: Int, $dateRange: Int, $allowAdult: Boolean, $allowUnknown: Boolean) {
+  queryPopular(type: $type, size: $size, dateRange: $dateRange, page: $page, allowAdult: $allowAdult, allowUnknown: $allowUnknown) {
+    recommendations {
+      anyCard { _id name englishName thumbnail availableChapters genres }
+    }
   }
 }`;
 
@@ -169,15 +170,18 @@ async function searchManga(query, page = 1, filters = {}) {
 
 async function fetchPopularManga(page = 1) {
   const data = await cachedGqlQuery(POPULAR_QUERY, {
-    search: { query: '', isManga: true, allowAdult: true, allowUnknown: true },
-    limit: 26,
+    type: 'manga',
+    size: 26,
+    dateRange: 0,
     page,
+    allowAdult: true,
+    allowUnknown: false,
   });
-  const edges = data?.data?.mangas?.edges || [];
-  const total = data?.data?.mangas?.pageInfo?.total || 0;
+  const recs = data?.data?.queryPopular?.recommendations || [];
+  const edges = recs.map((r) => r.anyCard).filter(Boolean);
   return {
     manga: mapMangaEdges(edges),
-    pagination: { page, totalPages: Math.ceil(total / 26), total },
+    pagination: { page, totalPages: 1, total: edges.length },
   };
 }
 
