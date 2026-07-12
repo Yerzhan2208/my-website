@@ -11,7 +11,7 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
    AllManga API Layer
    ═══════════════════════════════════════════════════════════ */
 
-const ALLMANGA_API = 'https://api.allanime.day/api';
+const API_PROXY = '/api/manga';
 const ASSET_CDN = 'https://wp.youtube-anime.com/aln.youtube-anime.com';
 const MANGA_CDN = 'https://ytimgf.fast4speed.rsvp';
 
@@ -24,21 +24,14 @@ const CHAPTER_PAGES_QUERY = `query chaptersForRead($mangaId: String!, $chapterSt
   }
 }`;
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-function gqlFetch(variables, sha256Hash, referer = 'https://allmanga.to/') {
-  const body = JSON.stringify({
-    extensions: { persistedQuery: { version: 1, sha256Hash } },
-    variables,
-  });
-  return fetch(ALLMANGA_API, {
+function gqlFetch(variables, sha256Hash) {
+  return fetch(API_PROXY, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Referer': referer,
-      'User-Agent': UA,
-    },
-    body,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      extensions: { persistedQuery: { version: 1, sha256Hash } },
+      variables,
+    }),
   }).then((r) => {
     if (!r.ok) throw new Error(`AllManga API ${r.status}`);
     return r.json();
@@ -82,7 +75,7 @@ function waitForRateLimit() {
   return Promise.resolve();
 }
 
-async function cachedGql(variables, hash, referer) {
+async function cachedGql(variables, hash) {
   const key = JSON.stringify({ variables, hash });
   if (apiCache.has(key)) {
     const cached = apiCache.get(key);
@@ -90,7 +83,7 @@ async function cachedGql(variables, hash, referer) {
   }
   await waitForRateLimit();
   requestTimestamps.push(Date.now());
-  const data = await gqlFetch(variables, hash, referer);
+  const data = await gqlFetch(variables, hash);
   apiCache.set(key, { data, ts: Date.now() });
   return data;
 }
@@ -158,21 +151,13 @@ async function fetchMangaDetail(id) {
 }
 
 async function fetchChapterPages(mangaId, chapterString, translationType = 'sub') {
-  const body = JSON.stringify({
-    query: CHAPTER_PAGES_QUERY,
-    variables: { mangaId, chapterString: String(chapterString), translationType },
-  });
-
-  await waitForRateLimit();
-  requestTimestamps.push(Date.now());
-  const res = await fetch(ALLMANGA_API, {
+  const res = await fetch(API_PROXY, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Referer': 'https://allmanga.to/',
-      'User-Agent': UA,
-    },
-    body,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: CHAPTER_PAGES_QUERY,
+      variables: { mangaId, chapterString: String(chapterString), translationType },
+    }),
   });
   if (!res.ok) throw new Error(`AllManga API ${res.status}`);
   const json = await res.json();
@@ -974,6 +959,22 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
   const pagerGoPrev = useCallback(() => setPagerIndex((i) => Math.max(i - 1, 0)), []);
   const pagerGoNext = useCallback(() => setPagerIndex((i) => Math.min(i + 1, pageUrls.length - 1)), [pageUrls.length]);
 
+  const touchStartRef = useRef(null);
+  const handleTouchStart = useCallback((e) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, time: Date.now() };
+  }, []);
+  const handleTouchEnd = useCallback((e) => {
+    if (!touchStartRef.current) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    const dt = Date.now() - touchStartRef.current.time;
+    touchStartRef.current = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 500) {
+      if (dx < 0) pagerGoNext();
+      else pagerGoPrev();
+    }
+  }, [pagerGoPrev, pagerGoNext]);
+
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
       <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur-sm z-20">
@@ -1039,6 +1040,8 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   if (x < rect.width / 2) pagerGoPrev();
                   else pagerGoNext();
                 }}
+                onTouchStart={handleTouchStart}
+                onTouchEnd={handleTouchEnd}
               >
                 {!loadedImages.has(pagerIndex) && (
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -1053,12 +1056,12 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   draggable={false}
                 />
                 {pagerIndex > 0 && (
-                  <div className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity pointer-events-none">
+                  <div className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 flex items-center justify-center sm:opacity-0 sm:hover:opacity-100 transition-opacity pointer-events-none opacity-60">
                     <ChevronLeft size={20} className="text-white" />
                   </div>
                 )}
                 {pagerIndex < pageUrls.length - 1 && (
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity pointer-events-none">
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 flex items-center justify-center sm:opacity-0 sm:hover:opacity-100 transition-opacity pointer-events-none opacity-60">
                     <ChevronRight size={20} className="text-white" />
                   </div>
                 )}

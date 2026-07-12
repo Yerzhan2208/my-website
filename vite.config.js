@@ -7,4 +7,18 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      '/api/manga': {
+        target: 'https://api.allanime.day',
+        changeOrigin: true,
+        rewrite: () => '/api',
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Referer', 'https://allmanga.to/');
+          });
+        },
+      },
+    },
+  },
 })
