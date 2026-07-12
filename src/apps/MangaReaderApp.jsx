@@ -3,6 +3,7 @@ import {
   BookOpen, Search, ChevronLeft, ChevronRight, ArrowLeft,
   Heart, Loader2, AlertCircle, X, Clock, Eye, RefreshCw,
   ChevronDown, Star, Filter, Tag, FolderPlus, LayoutGrid, Columns2,
+  ArrowUpDown, ArrowDownUp,
 } from 'lucide-react';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
@@ -483,6 +484,7 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
 
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [sortAsc, setSortAsc] = useState(false);
 
   const chaptersEndpoint = `/manga/${manga.id}/chapters`;
   const { data: chaptersData, loading: chapLoading, error: chapError, retry: chapRetry } = useMangaFetch(chaptersEndpoint);
@@ -663,9 +665,21 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
 
       <div className="flex-1 overflow-y-auto">
         <div className="px-4 sm:px-5 py-3">
-          <h3 className="text-sm font-semibold text-zinc-300 mb-2">
-            Chapters {!chapLoading && `(${chapters.length})`}
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-zinc-300">
+              Chapters {!chapLoading && `(${chapters.length})`}
+            </h3>
+            {chapters.length > 0 && (
+              <button
+                onClick={() => setSortAsc((s) => !s)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+                title={sortAsc ? 'Sort newest first' : 'Sort oldest first'}
+              >
+                {sortAsc ? <ArrowDownUp size={12} /> : <ArrowUpDown size={12} />}
+                {sortAsc ? 'Oldest' : 'Newest'}
+              </button>
+            )}
+          </div>
 
           {chapLoading && (
             <div className="flex items-center justify-center py-12">
@@ -682,7 +696,7 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
           )}
 
           <div className="space-y-1">
-            {[...chapters].reverse().map((ch) => {
+            {(sortAsc ? chapters : [...chapters].reverse()).map((ch) => {
               const chNum = ch.chapterNumber;
               const chTitle = ch.title;
               const pageCount = ch.pageCount || ch.pages?.length || 0;
