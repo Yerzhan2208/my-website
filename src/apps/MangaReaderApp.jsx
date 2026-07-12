@@ -274,22 +274,59 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
 
   const isSearching = debouncedSearch.trim().length > 0;
 
+  const NSFW_GENRES = ['Harem', 'Ecchi', 'Mature'];
+
   const buildUrl = useCallback(() => {
     if (isSearching) {
       return `/manga?query=${encodeURIComponent(debouncedSearch.trim())}&page=${page}&limit=20`;
     }
+    if (activeTab === 'nsfw') {
+      return `/manga?genre=${NSFW_GENRES[0]}&page=${page}&limit=20`;
+    }
     return `/manga?page=${page}&limit=20`;
-  }, [debouncedSearch, isSearching, page]);
+  }, [debouncedSearch, isSearching, activeTab, page]);
 
   const url = activeTab === 'library' ? null : buildUrl();
   const { data, loading, error, retry } = useMangaFetch(url, [url]);
+
+  const nsfwExtraRef = useRef([]);
+  const nsfwLoadedGenres = useRef(0);
+
+  useEffect(() => {
+    if (activeTab !== 'nsfw' || isSearching) return;
+    if (nsfwLoadedGenres.current >= NSFW_GENRES.length) return;
+    nsfwLoadedGenres.current = 0;
+    nsfwExtraRef.current = [];
+
+    NSFW_GENRES.forEach((genre, i) => {
+      if (i === 0) return;
+      apiFetch(`/manga?genre=${genre}&page=1&limit=20`)
+        .then((res) => {
+          if (res?.manga) {
+            nsfwExtraRef.current = [...nsfwExtraRef.current, ...res.manga];
+          }
+          nsfwLoadedGenres.current++;
+        })
+        .catch(() => { nsfwLoadedGenres.current++; });
+    });
+  }, [activeTab, isSearching]);
 
   useEffect(() => {
     if (data?.manga && data !== lastDataRef.current) {
       lastDataRef.current = data;
       let items = data.manga;
-      if (activeTab === 'popular' && items.length > 0) {
+      if (activeTab === 'popular') {
         items = [...items].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      }
+      if (activeTab === 'nsfw' && nsfwExtraRef.current.length > 0) {
+        const seen = new Set(items.map((m) => m.id));
+        for (const m of nsfwExtraRef.current) {
+          if (!seen.has(m.id)) {
+            items = [...items, m];
+            seen.add(m.id);
+          }
+        }
+        items.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
       }
       if (page === 1) {
         setAllManga(items);
@@ -313,6 +350,8 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
       setPage(1);
       lastDataRef.current = null;
       apiCache.clear();
+      nsfwExtraRef.current = [];
+      nsfwLoadedGenres.current = 0;
     }
   }, [activeTab]);
 
@@ -353,6 +392,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   const tabs = [
     { id: 'latest', label: 'Latest', icon: Clock },
     { id: 'popular', label: 'All', icon: Star },
+    { id: 'nsfw', label: 'NSFW', icon: Eye },
     { id: 'library', label: 'Library', icon: Heart },
   ];
 
