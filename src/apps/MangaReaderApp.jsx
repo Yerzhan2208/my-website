@@ -288,12 +288,8 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     if (data?.manga && data !== lastDataRef.current) {
       lastDataRef.current = data;
       let items = data.manga;
-      if (activeTab === 'latest' && items.length > 0) {
-        items = [...items].sort((a, b) => {
-          const da = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-          const db = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
-          return db - da;
-        });
+      if (activeTab === 'popular' && items.length > 0) {
+        items = [...items].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
       }
       if (page === 1) {
         setAllManga(items);
@@ -341,7 +337,9 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     setLibraryError(null);
     Promise.all(
       libraryIds.map((id) =>
-        apiFetch(`/manga/${id}`).catch(() => null)
+        apiFetch(`/manga/${id}`)
+          .then((res) => res?.manga || res)
+          .catch(() => null)
       )
     ).then((results) => {
       setLibraryData(results.filter(Boolean));
