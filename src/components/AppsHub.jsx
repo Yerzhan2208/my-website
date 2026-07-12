@@ -10,9 +10,9 @@ export default function AppsHub() {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <div className="max-w-6xl mx-auto px-8 pt-12 pb-8">
+      <div className="max-w-6xl mx-auto px-5 md:px-8 pt-12 pb-8">
         <div className="animate-fade-in">
-          <h1 className="text-3xl font-bold text-zinc-50 tracking-tight mb-2">Apps Hub</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-zinc-50 tracking-tight mb-2">Apps Hub</h1>
           <p className="text-sm text-zinc-500 max-w-lg">
             A collection of integrated productivity tools and utilities. Pin your favorites to the sidebar for quick access.
           </p>
@@ -20,7 +20,7 @@ export default function AppsHub() {
       </div>
 
       {/* App Grid */}
-      <div className="max-w-6xl mx-auto px-8 pb-16">
+      <div className="max-w-6xl mx-auto px-5 md:px-8 pb-16">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 stagger-children">
           {appRegistry.map(app => {
             const Icon = app.icon
