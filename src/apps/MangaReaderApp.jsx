@@ -270,6 +270,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   const debouncedSearch = useDebounce(searchInput, 300);
   const scrollRef = useRef(null);
   const lastDataRef = useRef(null);
+  const lastTabRef = useRef(activeTab);
 
   const isSearching = debouncedSearch.trim().length > 0;
 
@@ -277,11 +278,8 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     if (isSearching) {
       return `/manga?query=${encodeURIComponent(debouncedSearch.trim())}&page=${page}&limit=20`;
     }
-    if (activeTab === 'popular') {
-      return `/manga?page=${page}&limit=20`;
-    }
     return `/manga?page=${page}&limit=20`;
-  }, [debouncedSearch, isSearching, activeTab, page]);
+  }, [debouncedSearch, isSearching, page]);
 
   const url = activeTab === 'library' ? null : buildUrl();
   const { data, loading, error, retry } = useMangaFetch(url, [url]);
@@ -289,19 +287,38 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   useEffect(() => {
     if (data?.manga && data !== lastDataRef.current) {
       lastDataRef.current = data;
+      let items = data.manga;
+      if (activeTab === 'latest' && items.length > 0) {
+        items = [...items].sort((a, b) => {
+          const da = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+          const db = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+          return db - da;
+        });
+      }
       if (page === 1) {
-        setAllManga(data.manga);
+        setAllManga(items);
       } else {
-        setAllManga((prev) => [...prev, ...data.manga]);
+        setAllManga((prev) => [...prev, ...items]);
       }
     }
-  }, [data, page]);
+  }, [data, page, activeTab]);
 
   useEffect(() => {
-    setPage(1);
-    setAllManga([]);
-    lastDataRef.current = null;
-  }, [debouncedSearch, activeTab]);
+    if (debouncedSearch) {
+      setPage(1);
+      setAllManga([]);
+      lastDataRef.current = null;
+    }
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    if (activeTab !== lastTabRef.current) {
+      lastTabRef.current = activeTab;
+      setPage(1);
+      lastDataRef.current = null;
+      apiCache.clear();
+    }
+  }, [activeTab]);
 
   const hasMore = data?.pagination ? data.pagination.page < data.pagination.totalPages : false;
 
@@ -310,13 +327,14 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   };
 
   const libraryIds = Object.keys(library);
-  const [libraryData, setLibraryData] = useState(null);
+  const [libraryData, setLibraryData] = useState([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState(null);
 
   useEffect(() => {
-    if (activeTab !== 'library' || libraryIds.length === 0) {
-      setLibraryData(null);
+    if (activeTab !== 'library') return;
+    if (libraryIds.length === 0) {
+      setLibraryData([]);
       return;
     }
     setLibraryLoading(true);
@@ -340,7 +358,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     { id: 'library', label: 'Library', icon: Heart },
   ];
 
-  const displayManga = activeTab === 'library' ? (libraryData || []) : allManga;
+  const displayManga = activeTab === 'library' ? libraryData : allManga;
   const isLoading = activeTab === 'library' ? libraryLoading : loading;
   const currentError = activeTab === 'library' ? libraryError : error;
   const currentRetry = activeTab === 'library' ? undefined : retry;
@@ -421,6 +439,14 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
             <Heart size={40} className="text-zinc-700" />
             <p className="text-zinc-500 text-sm">Your library is empty</p>
             <p className="text-zinc-600 text-xs">Save manga to access them quickly</p>
+          </div>
+        )}
+
+        {!currentError && activeTab === 'library' && libraryIds.length > 0 && libraryData.length === 0 && !libraryLoading && (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <Heart size={40} className="text-zinc-700" />
+            <p className="text-zinc-500 text-sm">No saved manga found</p>
+            <p className="text-zinc-600 text-xs">Saved manga may have been removed from the source</p>
           </div>
         )}
 
