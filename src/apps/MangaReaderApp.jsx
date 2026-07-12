@@ -14,7 +14,11 @@ const API_BASE = '/api/mangadex';
 const IMG_CDN = 'https://uploads.mangadex.org';
 
 function proxyImage(url) {
-  if (!url || url.startsWith('/api/')) return url;
+  if (!url) return url;
+  if (url.startsWith('/api/') || url.startsWith('/proxy/')) return url;
+  if (url.startsWith(IMG_CDN + '/')) {
+    return url.replace(IMG_CDN, '/proxy');
+  }
   return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
 
