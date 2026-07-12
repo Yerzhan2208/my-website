@@ -12,6 +12,12 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 
 const API_BASE = 'https://api.mangadex.org';
 const IMG_CDN = 'https://uploads.mangadex.org';
+const PROXY_URL = '/api/proxy?url=';
+
+function proxyImage(url) {
+  if (!url || url.startsWith('/api/')) return url;
+  return PROXY_URL + encodeURIComponent(url);
+}
 
 // Simple in-memory cache: key → { data, ts }
 const apiCache = new Map();
@@ -66,13 +72,13 @@ function getMangaDescription(manga) {
 function getMangaCover(manga) {
   const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
   if (!coverRel?.attributes?.fileName) return null;
-  return `${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.256.jpg`;
+  return proxyImage(`${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.256.jpg`);
 }
 
 function getMangaCoverHQ(manga) {
   const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
   if (!coverRel?.attributes?.fileName) return null;
-  return `${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.512.jpg`;
+  return proxyImage(`${IMG_CDN}/covers/${manga.id}/${coverRel.attributes.fileName}.512.jpg`);
 }
 
 function getMangaAuthor(manga) {
@@ -927,14 +933,14 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   </div>
                 )}
                 <img
-                  src={pageUrls[pagerIndex]}
+                  src={proxyImage(pageUrls[pagerIndex])}
                   alt={`Page ${pagerIndex + 1}`}
                   className="max-h-full max-w-full object-contain"
                   onLoad={() => handleImageLoad(pagerIndex)}
                   onError={(e) => {
                     if (!e.target.dataset.retried) {
                       e.target.dataset.retried = 'true';
-                      e.target.src = pageUrls[pagerIndex].replace('/data-saver/', '/data/');
+                      e.target.src = proxyImage(pageUrls[pagerIndex].replace('/data-saver/', '/data/'));
                     }
                   }}
                   draggable={false}
@@ -1010,16 +1016,15 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   </div>
                 )}
                 <img
-                  src={url}
+                  src={proxyImage(url)}
                   alt={`Page ${i + 1}`}
                   loading="lazy"
                   className="w-full h-auto block"
                   onLoad={() => handleImageLoad(i)}
                   onError={(e) => {
-                    // Retry with full-quality URL on error
                     if (!e.target.dataset.retried) {
                       e.target.dataset.retried = 'true';
-                      e.target.src = url.replace('/data-saver/', '/data/');
+                      e.target.src = proxyImage(url.replace('/data-saver/', '/data/'));
                     }
                   }}
                 />
