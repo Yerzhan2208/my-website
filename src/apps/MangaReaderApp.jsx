@@ -3,7 +3,7 @@ import {
   BookOpen, Search, ChevronLeft, ChevronRight, ArrowLeft,
   Heart, Loader2, AlertCircle, X, Clock, Eye, RefreshCw,
   ChevronDown, Star, Filter, Tag, FolderPlus, LayoutGrid, Columns2,
-  ArrowUpDown, ArrowDownUp,
+  ArrowUpDown, ArrowDownUp, Plus, Minus,
 } from 'lucide-react';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
@@ -40,11 +40,18 @@ const POPULAR_QUERY = `query($type: VaildPopularTypeEnumType!, $size: Int!, $pag
 }`;
 
 const GENRES = [
-  'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror',
-  'Mystery', 'Romance', 'Sci-fi', 'Slice of Life', 'Sports',
-  'Supernatural', 'Thriller', 'Tragedy', 'Harem', 'Isekai',
-  'Martial Arts', 'Mecha', 'Psychological', 'School Life',
-  'Seinen', 'Shoujo', 'Shounen', 'Webtoon', 'Ecchi', 'Adult',
+  '4 Koma', 'Action', 'Adult', 'Adventure', 'Cars', 'Comedy', 'Cooking',
+  'Crossdressing', 'Dementia', 'Demons', 'Doujinshi', 'Drama', 'Ecchi',
+  'Fantasy', 'Game', 'Gender Bender', 'Gyaru', 'Harem', 'Historical',
+  'Horror', 'Isekai', 'Josei', 'Kids', 'Loli', 'Magic', 'Manhua',
+  'Manhwa', 'Martial Arts', 'Mature', 'Mecha', 'Medical', 'Military',
+  'Monster Girls', 'Music', 'Mystery', 'One Shot', 'Parody', 'Police',
+  'Post Apocalyptic', 'Psychological', 'Reincarnation', 'Reverse Harem',
+  'Romance', 'Samurai', 'School', 'Sci-Fi', 'Seinen', 'Shota', 'Shoujo',
+  'Shoujo Ai', 'Shounen', 'Shounen Ai', 'Slice of Life', 'Smut', 'Space',
+  'Sports', 'Super Power', 'Supernatural', 'Suspense', 'Thriller',
+  'Tragedy', 'Unknown', 'Vampire', 'Webtoons', 'Yaoi', 'Youkai', 'Yuri',
+  'Zombies',
 ];
 
 function gqlFetch(variables, sha256Hash) {
@@ -151,9 +158,10 @@ function mapMangaEdges(edges) {
 }
 
 async function searchManga(query, page = 1, filters = {}) {
-  const { translationType = 'sub', countryOrigin = 'ALL', genres = [] } = filters;
+  const { translationType = 'sub', countryOrigin = 'ALL', genres = { included: [], excluded: [] } } = filters;
   const search = { query, isManga: true };
-  if (genres.length > 0) search.genres = genres;
+  if (genres.included?.length > 0) search.genres = genres.included;
+  if (genres.excluded?.length > 0) search.excludeGenres = genres.excluded;
   const data = await cachedGqlQuery(MANGA_SEARCH_QUERY, {
     search,
     limit: 26,
@@ -170,7 +178,7 @@ async function searchManga(query, page = 1, filters = {}) {
 }
 
 async function fetchPopularManga(page = 1, filters = {}) {
-  const { genres = [] } = filters;
+  const { genres = { included: [], excluded: [] } } = filters;
   const data = await cachedGqlQuery(POPULAR_QUERY, {
     type: 'manga',
     size: 50,
@@ -182,8 +190,15 @@ async function fetchPopularManga(page = 1, filters = {}) {
   const recs = data?.data?.queryPopular?.recommendations || [];
   let edges = recs.map((r) => r.anyCard).filter(Boolean);
   let manga = mapMangaEdges(edges);
-  if (genres.length > 0) {
-    manga = manga.filter((m) => genres.some((g) => m.genres.map((mg) => mg.toLowerCase()).includes(g.toLowerCase())));
+  const inc = (genres.included || []);
+  const exc = (genres.excluded || []);
+  if (inc.length > 0 || exc.length > 0) {
+    manga = manga.filter((m) => {
+      const mg = (m.genres || []).map((g) => g.toLowerCase());
+      if (inc.length > 0 && !inc.some((g) => mg.includes(g.toLowerCase()))) return false;
+      if (exc.length > 0 && exc.some((g) => mg.includes(g.toLowerCase()))) return false;
+      return true;
+    });
   }
   const hasNextPage = edges.length >= 50;
   return {
@@ -452,15 +467,21 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   const lastFetchKey = useRef('');
 
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ genres: [], countryOrigin: 'ALL', translationType: 'sub' });
+  const [filters, setFilters] = useState({ genres: { included: [], excluded: [] }, countryOrigin: 'ALL', translationType: 'sub' });
 
   const isSearching = debouncedSearch.trim().length > 0;
 
   const toggleGenre = (genre) => {
-    setFilters((prev) => ({
-      ...prev,
-      genres: prev.genres.includes(genre) ? prev.genres.filter((g) => g !== genre) : [...prev.genres, genre],
-    }));
+    setFilters((prev) => {
+      const { included, excluded } = prev.genres;
+      if (included.includes(genre)) {
+        return { ...prev, genres: { included: included.filter((g) => g !== genre), excluded: [...excluded, genre] } };
+      }
+      if (excluded.includes(genre)) {
+        return { ...prev, genres: { included, excluded: excluded.filter((g) => g !== genre) } };
+      }
+      return { ...prev, genres: { included: [...included, genre], excluded } };
+    });
   };
 
   const fetchBrowse = useCallback(async (query, p, tab, currentFilters) => {
@@ -550,7 +571,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     { value: 'raw', label: 'Raw' },
   ];
 
-  const activeFilterCount = filters.genres.length + (filters.countryOrigin !== 'ALL' ? 1 : 0) + (filters.translationType !== 'sub' ? 1 : 0);
+  const activeFilterCount = (filters.genres.included.length + filters.genres.excluded.length) + (filters.countryOrigin !== 'ALL' ? 1 : 0) + (filters.translationType !== 'sub' ? 1 : 0);
 
   const displayManga = activeTab === 'library' ? libraryData : allManga;
   const isLoading = activeTab === 'library' ? libraryLoading : loading;
@@ -674,9 +695,9 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Genres</p>
-                {filters.genres.length > 0 && (
+                {(filters.genres.included.length > 0 || filters.genres.excluded.length > 0) && (
                   <button
-                    onClick={() => setFilters((prev) => ({ ...prev, genres: [] }))}
+                    onClick={() => setFilters((prev) => ({ ...prev, genres: { included: [], excluded: [] } }))}
                     className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
                   >
                     Clear all
@@ -684,19 +705,27 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
                 )}
               </div>
               <div className="flex gap-1 flex-wrap">
-                {GENRES.map((g) => (
-                  <button
-                    key={g}
-                    onClick={() => toggleGenre(g)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
-                      filters.genres.includes(g)
-                        ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent-light)] border border-[var(--color-accent)]/30'
-                        : 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/30 hover:text-zinc-200'
-                    }`}
-                  >
-                    {g}
-                  </button>
-                ))}
+                {GENRES.map((g) => {
+                  const isIncluded = filters.genres.included.includes(g);
+                  const isExcluded = filters.genres.excluded.includes(g);
+                  return (
+                    <button
+                      key={g}
+                      onClick={() => toggleGenre(g)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
+                        isIncluded
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          : isExcluded
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            : 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/30 hover:text-zinc-200'
+                      }`}
+                    >
+                      {isIncluded && <Plus size={10} />}
+                      {isExcluded && <Minus size={10} />}
+                      {g}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
