@@ -31,6 +31,13 @@ const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int,
   }
 }`;
 
+const POPULAR_QUERY = `query($search: SearchInput, $limit: Int, $page: Int) {
+  mangas(search: $search, limit: $limit, page: $page) {
+    edges { _id name englishName thumbnail availableChapters genres }
+    pageInfo { total hasNextPage }
+  }
+}`;
+
 const GENRES = [
   'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror',
   'Mystery', 'Romance', 'Sci-fi', 'Slice of Life', 'Sports',
@@ -143,8 +150,10 @@ function mapMangaEdges(edges) {
 
 async function searchManga(query, page = 1, filters = {}) {
   const { translationType = 'sub', countryOrigin = 'ALL', genres = [] } = filters;
+  const search = { query, isManga: true };
+  if (genres.length > 0) search.genres = genres;
   const data = await cachedGqlQuery(MANGA_SEARCH_QUERY, {
-    search: { query, isManga: true },
+    search,
     limit: 26,
     page,
     translationType,
@@ -152,12 +161,22 @@ async function searchManga(query, page = 1, filters = {}) {
   });
   const edges = data?.data?.mangas?.edges || [];
   const total = data?.data?.mangas?.pageInfo?.total || 0;
-  let manga = mapMangaEdges(edges);
-  if (genres.length > 0) {
-    manga = manga.filter((m) => genres.some((g) => m.genres.map((mg) => mg.toLowerCase()).includes(g.toLowerCase())));
-  }
   return {
-    manga,
+    manga: mapMangaEdges(edges),
+    pagination: { page, totalPages: Math.ceil(total / 26), total },
+  };
+}
+
+async function fetchPopularManga(page = 1) {
+  const data = await cachedGqlQuery(POPULAR_QUERY, {
+    search: { query: '', isManga: true, allowAdult: true, allowUnknown: true },
+    limit: 26,
+    page,
+  });
+  const edges = data?.data?.mangas?.edges || [];
+  const total = data?.data?.mangas?.pageInfo?.total || 0;
+  return {
+    manga: mapMangaEdges(edges),
     pagination: { page, totalPages: Math.ceil(total / 26), total },
   };
 }
@@ -433,7 +452,9 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     setLoading(true);
     setError(null);
     try {
-      const result = await searchManga(query || '', p, currentFilters);
+      const result = tab === 'popular'
+        ? await fetchPopularManga(p)
+        : await searchManga(query || '', p, currentFilters);
       setTotalPages(result.pagination?.totalPages || 0);
       if (p === 1) {
         setAllManga(result.manga);
