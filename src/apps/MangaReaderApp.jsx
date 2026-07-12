@@ -10,12 +10,8 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
    API Layer — caching, rate-limiting, helpers
    ═══════════════════════════════════════════════════════════ */
 
-const API_BASE = 'https://api.mangadex.org';
+const API_BASE = '/api/mangadex';
 const IMG_CDN = 'https://uploads.mangadex.org';
-
-function proxyApi(path) {
-  return `/api/proxy?api=${encodeURIComponent(path)}`;
-}
 
 function proxyImage(url) {
   if (!url || url.startsWith('/api/')) return url;
@@ -49,7 +45,7 @@ async function apiFetch(path, skipCache = false) {
   }
   await waitForRateLimit();
   requestTimestamps.push(Date.now());
-  const res = await fetch(proxyApi(path));
+  const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`API error ${res.status}`);
   const json = await res.json();
   if (!skipCache) {
