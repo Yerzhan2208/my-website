@@ -31,18 +31,12 @@ const MANGA_SEARCH_QUERY = `query($search: SearchInput, $limit: Int, $page: Int,
   }
 }`;
 
-const POPULAR_QUERY = `query($type: VaildContentTypeEnum!, $size: Int, $dateRange: Int, $page: Int, $allowAdult: Boolean, $allowUnknown: Boolean) {
-  queryPopular(type: $type, size: $size, dateRange: $dateRange, page: $page, allowAdult: $allowAdult, allowUnknown: $allowUnknown) {
-    recommendations { _id name englishName thumbnail availableChapters genres }
-  }
-}`;
-
 const GENRES = [
   'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror',
   'Mystery', 'Romance', 'Sci-fi', 'Slice of Life', 'Sports',
   'Supernatural', 'Thriller', 'Tragedy', 'Harem', 'Isekai',
   'Martial Arts', 'Mecha', 'Psychological', 'School Life',
-  'Seinen', 'Shoujo', 'Shounen', 'Webtoon',
+  'Seinen', 'Shoujo', 'Shounen', 'Webtoon', 'Ecchi', 'Adult',
 ];
 
 function gqlFetch(variables, sha256Hash) {
@@ -165,22 +159,6 @@ async function searchManga(query, page = 1, filters = {}) {
   return {
     manga,
     pagination: { page, totalPages: Math.ceil(total / 26), total },
-  };
-}
-
-async function fetchPopularManga(dateRange = 7, page = 1) {
-  const data = await cachedGqlQuery(POPULAR_QUERY, {
-    type: 'manga',
-    size: 26,
-    dateRange,
-    page,
-    allowAdult: false,
-    allowUnknown: false,
-  });
-  const edges = data?.data?.queryPopular?.recommendations || [];
-  return {
-    manga: mapMangaEdges(edges),
-    pagination: { page, totalPages: 1, total: edges.length },
   };
 }
 
@@ -438,7 +416,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
 
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({ genres: [], countryOrigin: 'ALL', translationType: 'sub' });
-  const [popularRange, setPopularRange] = useState(7);
 
   const isSearching = debouncedSearch.trim().length > 0;
 
@@ -449,19 +426,14 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     }));
   };
 
-  const fetchBrowse = useCallback(async (query, p, tab, currentFilters, pRange) => {
-    const key = `${query}|${p}|${tab}|${JSON.stringify(currentFilters)}|${pRange}`;
+  const fetchBrowse = useCallback(async (query, p, tab, currentFilters) => {
+    const key = `${query}|${p}|${tab}|${JSON.stringify(currentFilters)}`;
     if (key === lastFetchKey.current) return;
     lastFetchKey.current = key;
     setLoading(true);
     setError(null);
     try {
-      let result;
-      if (tab === 'popular') {
-        result = await fetchPopularManga(pRange, p);
-      } else {
-        result = await searchManga(query || '', p, currentFilters);
-      }
+      const result = await searchManga(query || '', p, currentFilters);
       setTotalPages(result.pagination?.totalPages || 0);
       if (p === 1) {
         setAllManga(result.manga);
@@ -481,13 +453,13 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     setAllManga([]);
     lastFetchKey.current = '';
     const query = isSearching ? debouncedSearch.trim() : '';
-    fetchBrowse(query, 1, activeTab, filters, popularRange);
-  }, [debouncedSearch, activeTab, filters, popularRange]);
+    fetchBrowse(query, 1, activeTab, filters);
+  }, [debouncedSearch, activeTab, filters]);
 
   useEffect(() => {
     if (page > 1 && activeTab !== 'library') {
       const query = isSearching ? debouncedSearch.trim() : '';
-      fetchBrowse(query, page, activeTab, filters, popularRange);
+      fetchBrowse(query, page, activeTab, filters);
     }
   }, [page]);
 
@@ -525,13 +497,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     { id: 'latest', label: 'Latest', icon: Clock },
     { id: 'popular', label: 'Popular', icon: Star },
     { id: 'library', label: 'Library', icon: Heart },
-  ];
-
-  const popularRanges = [
-    { value: 1, label: 'Trending' },
-    { value: 7, label: 'Weekly' },
-    { value: 30, label: 'Monthly' },
-    { value: 365, label: 'All Time' },
   ];
 
   const countries = [
@@ -612,7 +577,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
           {activeTab !== 'library' && (
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 showFilters || activeFilterCount > 0
                   ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent-light)] border border-[var(--color-accent)]/30'
                   : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 border border-zinc-700/30'
@@ -628,24 +593,6 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
             </button>
           )}
         </div>
-
-        {activeTab === 'popular' && !isSearching && (
-          <div className="flex gap-1">
-            {popularRanges.map((r) => (
-              <button
-                key={r.value}
-                onClick={() => setPopularRange(r.value)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all ${
-                  popularRange === r.value
-                    ? 'bg-zinc-700 text-zinc-100'
-                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        )}
 
         {showFilters && activeTab !== 'library' && (
           <div className="space-y-3 animate-scale-in">
@@ -727,7 +674,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
         {currentError && <ErrorState message={currentError} onRetry={() => {
           lastFetchKey.current = '';
           const query = isSearching ? debouncedSearch.trim() : '';
-          fetchBrowse(query, 1, activeTab, filters, popularRange);
+          fetchBrowse(query, 1, activeTab, filters);
         }} />}
 
         {!currentError && activeTab === 'library' && libraryIds.length === 0 && (
