@@ -1,9 +1,13 @@
 const ALLOWED_HOSTS = [
-  '.mangadex.org',
-  '.mangadex.network',
-  'imgsrv4.com',
-  'www.mgeko.cc',
+  'ytimgf.fast4speed.rsvp',
+  'wp.youtube-anime.com',
 ];
+
+function getReferer(host) {
+  if (host.endsWith('fast4speed.rsvp')) return 'https://youtu-chan.com/';
+  if (host.endsWith('youtube-anime.com')) return 'https://allmanga.to/';
+  return 'https://allmanga.to/';
+}
 
 export default async function handler(req, res) {
   const { url } = req.query;
@@ -19,15 +23,15 @@ export default async function handler(req, res) {
 
   const host = parsed.hostname;
   const allowed = ALLOWED_HOSTS.some(
-    (h) => host === h.replace(/^\./, '') || host.endsWith(h)
+    (h) => host === h || host.endsWith('.' + h)
   );
   if (!allowed) return res.status(403).json({ error: `Domain not allowed: ${host}` });
 
   try {
     const upstream = await fetch(parsed.href, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Referer': 'https://www.google.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Referer': getReferer(host),
         'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
       },
       redirect: 'follow',

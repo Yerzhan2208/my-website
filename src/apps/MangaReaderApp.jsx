@@ -8,18 +8,64 @@ import {
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
 /* ═══════════════════════════════════════════════════════════
-   API Layer — OriginManga
+   AllManga API Layer
    ═══════════════════════════════════════════════════════════ */
 
-const API_BASE = 'https://originmanga.com/api/public';
+const ALLMANGA_API = 'https://api.allanime.day/api';
+const ASSET_CDN = 'https://wp.youtube-anime.com/aln.youtube-anime.com';
+const MANGA_CDN = 'https://ytimgf.fast4speed.rsvp';
+
+const SEARCH_HASH = '2d48e19fb67ddcac42fbb885204b6abb0a84f406f15ef83f36de4a66f49f651a';
+const DETAIL_HASH = 'd77781dcf964b97aea0be621dbde430e89e200b58526823ee6010dd11c3ca96a';
+
+const CHAPTER_PAGES_QUERY = `query chaptersForRead($mangaId: String!, $chapterString: String!, $translationType: VaildTranslationTypeMangaEnumType!) {
+  chaptersForRead(mangaId: $mangaId, translationType: $translationType, chapterString: $chapterString, limit: 100) {
+    edges { _id chapterString pictureUrls pictureUrlHead }
+  }
+}`;
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+function gqlFetch(variables, sha256Hash, referer = 'https://allmanga.to/') {
+  const body = JSON.stringify({
+    extensions: { persistedQuery: { version: 1, sha256Hash } },
+    variables,
+  });
+  return fetch(ALLMANGA_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Referer': referer,
+      'User-Agent': UA,
+    },
+    body,
+  }).then((r) => {
+    if (!r.ok) throw new Error(`AllManga API ${r.status}`);
+    return r.json();
+  });
+}
+
+function normalizeThumbnail(path) {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${ASSET_CDN}/${path.replace(/^\//, '')}`;
+}
 
 function proxyImage(url) {
   if (!url) return url;
   if (url.startsWith('/api/proxy')) return url;
-  if (url.includes('imgsrv4.com') || url.includes('mgeko.cc')) {
+  const needsProxy = url.includes('fast4speed.rsvp') || url.includes('youtube-anime.com');
+  if (needsProxy) {
     return `/api/proxy?url=${encodeURIComponent(url)}`;
   }
   return url;
+}
+
+function getCoverUrl(thumbnail, w = 250) {
+  if (!thumbnail) return null;
+  let url = normalizeThumbnail(thumbnail);
+  if (url && !url.includes('?')) url = `${url}?w=${w}`;
+  return proxyImage(url);
 }
 
 const apiCache = new Map();
@@ -28,49 +74,142 @@ const CACHE_TTL = 5 * 60 * 1000;
 const requestTimestamps = [];
 function waitForRateLimit() {
   const now = Date.now();
-  while (requestTimestamps.length && requestTimestamps[0] < now - 1000) {
-    requestTimestamps.shift();
-  }
-  if (requestTimestamps.length >= 5) {
+  while (requestTimestamps.length && requestTimestamps[0] < now - 1000) requestTimestamps.shift();
+  if (requestTimestamps.length >= 4) {
     const wait = requestTimestamps[0] + 1000 - now + 10;
     return new Promise((r) => setTimeout(r, wait));
   }
   return Promise.resolve();
 }
 
-async function apiFetch(path, skipCache = false) {
-  const cacheKey = path;
-  if (!skipCache && apiCache.has(cacheKey)) {
-    const cached = apiCache.get(cacheKey);
+async function cachedGql(variables, hash, referer) {
+  const key = JSON.stringify({ variables, hash });
+  if (apiCache.has(key)) {
+    const cached = apiCache.get(key);
     if (Date.now() - cached.ts < CACHE_TTL) return cached.data;
   }
   await waitForRateLimit();
   requestTimestamps.push(Date.now());
-  const res = await fetch(`${API_BASE}${path}`);
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  const json = await res.json();
-  if (!skipCache) {
-    apiCache.set(cacheKey, { data: json, ts: Date.now() });
-  }
-  return json;
+  const data = await gqlFetch(variables, hash, referer);
+  apiCache.set(key, { data, ts: Date.now() });
+  return data;
 }
 
-// ── Helpers ──────────────────────────────────────────────
+async function searchManga(query, page = 1, translationType = 'sub', countryOrigin = 'ALL') {
+  const data = await cachedGql(
+    { search: { query, isManga: true }, limit: 26, page, translationType, countryOrigin },
+    SEARCH_HASH
+  );
+  const edges = data?.data?.mangas?.edges || [];
+  const total = data?.data?.mangas?.pageInfo?.total || 0;
+  return {
+    manga: edges.map((e) => ({
+      id: e._id,
+      title: e.name || e.englishName || 'Untitled',
+      description: '',
+      coverUrl: getCoverUrl(e.thumbnail),
+      author: 'Unknown',
+      status: 'ongoing',
+      chapterCount: e.availableChapters?.sub || 0,
+      genres: [],
+      _allManga: { availableChapters: e.availableChapters, thumbnail: e.thumbnail },
+    })),
+    pagination: { page, totalPages: Math.ceil(total / 26), total },
+  };
+}
+
+async function fetchMangaDetail(id) {
+  const data = await cachedGql(
+    { _id: id, search: { allowAdult: false, allowUnknown: false } },
+    DETAIL_HASH
+  );
+  const m = data?.data?.manga;
+  if (!m) throw new Error('Manga not found');
+
+  const chapters = [];
+  const maxCh = m.availableChapters?.sub || 0;
+  for (let i = 1; i <= maxCh; i++) {
+    chapters.push({
+      id: `${id}:sub:${i}`,
+      chapterNumber: i,
+      title: '',
+      pageCount: 0,
+    });
+  }
+
+  return {
+    manga: {
+      id: m._id,
+      title: m.name || m.englishName || 'Untitled',
+      description: m.description || '',
+      coverUrl: getCoverUrl(m.thumbnail),
+      author: 'Unknown',
+      status: m.lastChapterInfo?.sub ? 'ongoing' : 'completed',
+      chapterCount: maxCh,
+      genres: [],
+      _allManga: {
+        availableChapters: m.availableChapters,
+        thumbnail: m.thumbnail,
+        description: m.description,
+      },
+    },
+    chapters,
+  };
+}
+
+async function fetchChapterPages(mangaId, chapterString, translationType = 'sub') {
+  const body = JSON.stringify({
+    query: CHAPTER_PAGES_QUERY,
+    variables: { mangaId, chapterString: String(chapterString), translationType },
+  });
+
+  await waitForRateLimit();
+  requestTimestamps.push(Date.now());
+  const res = await fetch(ALLMANGA_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Referer': 'https://allmanga.to/',
+      'User-Agent': UA,
+    },
+    body,
+  });
+  if (!res.ok) throw new Error(`AllManga API ${res.status}`);
+  const json = await res.json();
+
+  const edge = json?.data?.chaptersForRead?.edges?.[0];
+  if (!edge) throw new Error('No chapter data');
+
+  const pages = edge.pictureUrls || [];
+  return pages
+    .sort((a, b) => (a.num ?? 0) - (b.num ?? 0))
+    .map((p) => {
+      const path = typeof p === 'string' ? p : p.url || '';
+      if (!path) return null;
+      const fullUrl = path.startsWith('http') ? path : `${MANGA_CDN}/${path.replace(/^\//, '')}`;
+      return proxyImage(fullUrl);
+    })
+    .filter(Boolean);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Helpers
+   ═══════════════════════════════════════════════════════════ */
 
 function getMangaTitle(manga) {
   return manga.title || 'Untitled';
 }
 
 function getMangaDescription(manga) {
-  return manga.description || '';
+  return manga.description || manga._allManga?.description || '';
 }
 
 function getMangaCover(manga) {
-  return proxyImage(manga.coverUrl);
+  return manga.coverUrl || getCoverUrl(manga._allManga?.thumbnail);
 }
 
 function getMangaCoverHQ(manga) {
-  return proxyImage(manga.coverUrl);
+  return getMangaCover(manga);
 }
 
 function getMangaAuthor(manga) {
@@ -79,15 +218,7 @@ function getMangaAuthor(manga) {
 
 function getMangaTags(manga) {
   if (!manga.genres) return [];
-  return manga.genres
-    .map((g) => {
-      if (typeof g === 'string') {
-        const cleaned = g.replace(/^\["|"\]$/g, '').replace(/^"/, '').replace(/"$/, '');
-        return cleaned;
-      }
-      return g;
-    })
-    .filter(Boolean);
+  return manga.genres.filter(Boolean);
 }
 
 function normalizeStatus(status) {
@@ -120,36 +251,6 @@ function useDebounce(value, delay) {
     return () => clearTimeout(timer);
   }, [value, delay]);
   return debounced;
-}
-
-function useMangaFetch(url, deps = []) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const mountedRef = useRef(true);
-
-  const fetchData = useCallback(async () => {
-    if (!url) { setLoading(false); return; }
-    setLoading(true);
-    setError(null);
-    try {
-      const json = await apiFetch(url);
-      if (mountedRef.current) setData(json);
-    } catch (err) {
-      if (mountedRef.current) setError(err.message);
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, ...deps]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    fetchData();
-    return () => { mountedRef.current = false; };
-  }, [fetchData]);
-
-  return { data, loading, error, retry: fetchData };
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -250,6 +351,9 @@ function MangaCard({ manga, isInLibrary, progress, category, onClick }) {
           {title}
         </h3>
         <p className="text-[11px] text-zinc-500 truncate">{author}</p>
+        {manga.chapterCount > 0 && (
+          <p className="text-[10px] text-zinc-600">{manga.chapterCount} chapters</p>
+        )}
         {lastChapter && (
           <p className="text-[10px] text-[var(--color-accent)]">
             Ch. {lastChapter}
@@ -267,99 +371,63 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   const [activeTab, setActiveTab] = useState('latest');
   const [page, setPage] = useState(1);
   const [allManga, setAllManga] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [totalPages, setTotalPages] = useState(0);
   const debouncedSearch = useDebounce(searchInput, 300);
   const scrollRef = useRef(null);
-  const lastDataRef = useRef(null);
-  const lastTabRef = useRef(activeTab);
+  const lastFetchKey = useRef('');
 
   const isSearching = debouncedSearch.trim().length > 0;
 
-  const NSFW_GENRES = ['Harem', 'Ecchi', 'Mature'];
-
-  const buildUrl = useCallback(() => {
-    if (isSearching) {
-      return `/manga?query=${encodeURIComponent(debouncedSearch.trim())}&page=${page}&limit=20`;
-    }
-    if (activeTab === 'nsfw') {
-      return `/manga?genre=${NSFW_GENRES[0]}&page=${page}&limit=20`;
-    }
-    return `/manga?page=${page}&limit=20`;
-  }, [debouncedSearch, isSearching, activeTab, page]);
-
-  const url = activeTab === 'library' ? null : buildUrl();
-  const { data, loading, error, retry } = useMangaFetch(url, [url]);
-
-  const nsfwExtraRef = useRef([]);
-  const nsfwLoadedGenres = useRef(0);
-
-  useEffect(() => {
-    if (activeTab !== 'nsfw' || isSearching) return;
-    if (nsfwLoadedGenres.current >= NSFW_GENRES.length) return;
-    nsfwLoadedGenres.current = 0;
-    nsfwExtraRef.current = [];
-
-    NSFW_GENRES.forEach((genre, i) => {
-      if (i === 0) return;
-      apiFetch(`/manga?genre=${genre}&page=1&limit=20`)
-        .then((res) => {
-          if (res?.manga) {
-            nsfwExtraRef.current = [...nsfwExtraRef.current, ...res.manga];
-          }
-          nsfwLoadedGenres.current++;
-        })
-        .catch(() => { nsfwLoadedGenres.current++; });
-    });
-  }, [activeTab, isSearching]);
-
-  useEffect(() => {
-    if (data?.manga && data !== lastDataRef.current) {
-      lastDataRef.current = data;
-      let items = data.manga;
-      if (activeTab === 'popular') {
-        items = [...items].sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-      }
-      if (activeTab === 'nsfw' && nsfwExtraRef.current.length > 0) {
-        const seen = new Set(items.map((m) => m.id));
-        for (const m of nsfwExtraRef.current) {
-          if (!seen.has(m.id)) {
-            items = [...items, m];
-            seen.add(m.id);
-          }
-        }
-        items.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-      }
-      if (page === 1) {
-        setAllManga(items);
+  const fetchBrowse = useCallback(async (query, p, tab) => {
+    const key = `${query}|${p}|${tab}`;
+    if (key === lastFetchKey.current) return;
+    lastFetchKey.current = key;
+    setLoading(true);
+    setError(null);
+    try {
+      let result;
+      if (tab === 'latest' || isSearching) {
+        result = await searchManga(query || '', p);
+      } else if (tab === 'popular') {
+        result = await searchManga(query || '', p);
+        result.manga.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
       } else {
-        setAllManga((prev) => [...prev, ...items]);
+        result = await searchManga(query || '', p);
       }
+      setTotalPages(result.pagination?.totalPages || 0);
+      if (p === 1) {
+        setAllManga(result.manga);
+      } else {
+        setAllManga((prev) => [...prev, ...result.manga]);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
     }
-  }, [data, page, activeTab]);
+  }, [isSearching]);
 
   useEffect(() => {
-    if (debouncedSearch) {
-      setPage(1);
-      setAllManga([]);
-      lastDataRef.current = null;
-    }
-  }, [debouncedSearch]);
+    if (activeTab === 'library') return;
+    setPage(1);
+    setAllManga([]);
+    lastFetchKey.current = '';
+    const query = isSearching ? debouncedSearch.trim() : '';
+    fetchBrowse(query, 1, activeTab);
+  }, [debouncedSearch, activeTab]);
 
   useEffect(() => {
-    if (activeTab !== lastTabRef.current) {
-      lastTabRef.current = activeTab;
-      setPage(1);
-      lastDataRef.current = null;
-      apiCache.clear();
-      nsfwExtraRef.current = [];
-      nsfwLoadedGenres.current = 0;
+    if (page > 1 && activeTab !== 'library') {
+      const query = isSearching ? debouncedSearch.trim() : '';
+      fetchBrowse(query, page, activeTab);
     }
-  }, [activeTab]);
+  }, [page]);
 
-  const hasMore = data?.pagination ? data.pagination.page < data.pagination.totalPages : false;
+  const hasMore = page < totalPages;
 
-  const loadMore = () => {
-    setPage((p) => p + 1);
-  };
+  const loadMore = () => setPage((p) => p + 1);
 
   const libraryIds = Object.keys(library);
   const [libraryData, setLibraryData] = useState([]);
@@ -376,9 +444,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
     setLibraryError(null);
     Promise.all(
       libraryIds.map((id) =>
-        apiFetch(`/manga/${id}`)
-          .then((res) => res?.manga || res)
-          .catch(() => null)
+        fetchMangaDetail(id).then((r) => r.manga).catch(() => null)
       )
     ).then((results) => {
       setLibraryData(results.filter(Boolean));
@@ -392,14 +458,12 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
   const tabs = [
     { id: 'latest', label: 'Latest', icon: Clock },
     { id: 'popular', label: 'All', icon: Star },
-    { id: 'nsfw', label: 'NSFW', icon: Eye },
     { id: 'library', label: 'Library', icon: Heart },
   ];
 
   const displayManga = activeTab === 'library' ? libraryData : allManga;
   const isLoading = activeTab === 'library' ? libraryLoading : loading;
   const currentError = activeTab === 'library' ? libraryError : error;
-  const currentRetry = activeTab === 'library' ? undefined : retry;
 
   return (
     <div className="flex flex-col h-full overflow-hidden animate-fade-in">
@@ -410,7 +474,7 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-lg font-bold text-zinc-100 tracking-tight">Manga Reader</h1>
-            <p className="text-[11px] text-zinc-500">{libraryIds.length} saved · Powered by OriginManga</p>
+            <p className="text-[11px] text-zinc-500">{libraryIds.length} saved · Powered by AllManga</p>
           </div>
         </div>
 
@@ -470,7 +534,11 @@ function BrowseView({ onSelectManga, library, progress, categories }) {
           </div>
         )}
 
-        {currentError && <ErrorState message={currentError} onRetry={currentRetry} />}
+        {currentError && <ErrorState message={currentError} onRetry={() => {
+          lastFetchKey.current = '';
+          const query = isSearching ? debouncedSearch.trim() : '';
+          fetchBrowse(query, 1, activeTab);
+        }} />}
 
         {!currentError && activeTab === 'library' && libraryIds.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-3">
@@ -549,14 +617,26 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [sortAsc, setSortAsc] = useState(false);
+  const [chapters, setChapters] = useState([]);
+  const [chapLoading, setChapLoading] = useState(true);
+  const [chapError, setChapError] = useState(null);
 
-  const chaptersEndpoint = `/manga/${manga.id}/chapters`;
-  const { data: chaptersData, loading: chapLoading, error: chapError, retry: chapRetry } = useMangaFetch(chaptersEndpoint);
-
-  const chapters = useMemo(() => {
-    if (!chaptersData?.chapters) return [];
-    return chaptersData.chapters.sort((a, b) => (a.chapterNumber || 0) - (b.chapterNumber || 0));
-  }, [chaptersData]);
+  useEffect(() => {
+    let cancelled = false;
+    setChapLoading(true);
+    setChapError(null);
+    fetchMangaDetail(manga.id)
+      .then((r) => {
+        if (!cancelled) setChapters(r.chapters);
+      })
+      .catch((err) => {
+        if (!cancelled) setChapError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setChapLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [manga.id]);
 
   const toggleLibrary = () => {
     setLibrary((prev) => {
@@ -751,7 +831,7 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
             </div>
           )}
 
-          {chapError && <ErrorState message={chapError} onRetry={chapRetry} />}
+          {chapError && <ErrorState message={chapError} onRetry={() => {}} />}
 
           {!chapLoading && !chapError && chapters.length === 0 && (
             <div className="text-center py-12">
@@ -763,7 +843,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
             {(sortAsc ? chapters : [...chapters].reverse()).map((ch) => {
               const chNum = ch.chapterNumber;
               const chTitle = ch.title;
-              const pageCount = ch.pageCount || ch.pages?.length || 0;
               const isRead = mangaProgress?.readChapters?.[ch.id];
 
               return (
@@ -784,9 +863,6 @@ function DetailView({ manga, onBack, onReadChapter, library, setLibrary, progres
                       {chTitle || `Chapter ${chNum || '?'}`}
                     </span>
                   </div>
-                  {pageCount > 0 && (
-                    <span className="text-[10px] text-zinc-600 shrink-0">{pageCount}p</span>
-                  )}
                   {isRead && (
                     <span className="text-[10px] text-[var(--color-accent)] font-medium px-1.5 py-0.5 rounded bg-[var(--color-accent)]/10 shrink-0">
                       READ
@@ -832,14 +908,10 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
       setPageUrls([]);
       setLoadedImages(new Set());
       try {
-        if (chapter.pages && chapter.pages.length > 0) {
-          if (!cancelled) setPageUrls(chapter.pages);
-        } else {
-          const json = await apiFetch(`/manga/${manga.id}/chapters`, true);
-          if (cancelled) return;
-          const ch = json?.chapters?.find((c) => c.id === chapter.id);
-          if (ch?.pages?.length) {
-            setPageUrls(ch.pages);
+        const pages = await fetchChapterPages(manga.id, chNum);
+        if (!cancelled) {
+          if (pages.length > 0) {
+            setPageUrls(pages);
           } else {
             throw new Error('No pages available for this chapter');
           }
@@ -852,7 +924,7 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
     }
     fetchPages();
     return () => { cancelled = true; };
-  }, [chapter.id, manga.id]);
+  }, [chapter.id, manga.id, chNum]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
@@ -881,9 +953,8 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
   const retryFetch = useCallback(() => {
     setLoading(true);
     setError(null);
-    setPageUrls(chapter.pages || []);
-    setLoading(false);
-  }, [chapter]);
+    setPageUrls([]);
+  }, []);
 
   useEffect(() => {
     if (!isPager || pageUrls.length === 0) return;
@@ -975,7 +1046,7 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   </div>
                 )}
                 <img
-                  src={proxyImage(pageUrls[pagerIndex])}
+                  src={pageUrls[pagerIndex]}
                   alt={`Page ${pagerIndex + 1}`}
                   className="max-h-full max-w-full object-contain"
                   onLoad={() => handleImageLoad(pagerIndex)}
@@ -1050,7 +1121,7 @@ function ReaderView({ manga, chapter, chapters, onBack, onNavigate, setProgress,
                   </div>
                 )}
                 <img
-                  src={proxyImage(url)}
+                  src={url}
                   alt={`Page ${i + 1}`}
                   loading="lazy"
                   className="w-full h-auto block"
