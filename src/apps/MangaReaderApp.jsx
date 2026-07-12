@@ -14,9 +14,9 @@ const API_BASE = 'https://originmanga.com/api/public';
 
 function proxyImage(url) {
   if (!url) return url;
-  if (url.startsWith('/proxy/')) return url;
+  if (url.startsWith('/api/proxy')) return url;
   if (url.includes('imgsrv4.com') || url.includes('mgeko.cc')) {
-    return `/proxy/manga?url=${encodeURIComponent(url)}`;
+    return `/api/proxy?url=${encodeURIComponent(url)}`;
   }
   return url;
 }
