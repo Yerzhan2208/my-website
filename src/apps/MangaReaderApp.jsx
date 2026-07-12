@@ -12,11 +12,14 @@ import { useLocalStorage } from '../hooks/useLocalStorage';
 
 const API_BASE = 'https://api.mangadex.org';
 const IMG_CDN = 'https://uploads.mangadex.org';
-const PROXY_URL = '/api/proxy?url=';
+
+function proxyApi(path) {
+  return `/api/proxy?api=${encodeURIComponent(path)}`;
+}
 
 function proxyImage(url) {
   if (!url || url.startsWith('/api/')) return url;
-  return PROXY_URL + encodeURIComponent(url);
+  return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
 
 // Simple in-memory cache: key → { data, ts }
@@ -46,7 +49,7 @@ async function apiFetch(path, skipCache = false) {
   }
   await waitForRateLimit();
   requestTimestamps.push(Date.now());
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(proxyApi(path));
   if (!res.ok) throw new Error(`API error ${res.status}`);
   const json = await res.json();
   if (!skipCache) {
